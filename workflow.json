@@ -58,7 +58,13 @@
       "name": "Send Welcome 1",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [450, 100]
+      "position": [450, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
     },
     {
       "parameters": {
@@ -73,7 +79,13 @@
       "name": "Send Welcome 2",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [650, 100]
+      "position": [650, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
     },
     {
       "parameters": {
@@ -96,7 +108,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ({{ $('Init Conversation').first().json.id }}, 'assistant', 'Hey! I''m your AI assistant. I help people figure out what parts of their business can be automated. What''s something you do manually that feels like it should just... happen?') RETURNING id",
+        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ('{{ $('Init Conversation').first().json.id }}', 'assistant', 'Hey! I''m your AI assistant. I help people figure out what parts of their business can be automated. What''s something you do manually that feels like it should just... happen?') RETURNING id",
         "options": {}
       },
       "id": "save-welcome-message",
@@ -131,33 +143,15 @@
     },
     {
       "parameters": {
-        "operation": "sendChatAction",
-        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
-        "action": "typing"
-      },
-      "id": "show-typing",
-      "name": "Show Typing",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [600, 400],
-      "credentials": {
-        "telegramApi": {
-          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
-          "name": "Telegram Bot"
-        }
-      }
-    },
-    {
-      "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ({{ $('Upsert Conversation').first().json.id }}, 'user', '{{ $('Telegram Trigger').item.json.message.text.replace(/'/g, \"''\") }}') RETURNING id",
+        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ('{{ $('Upsert Conversation').first().json.id }}', 'user', '{{ $('Telegram Trigger').item.json.message.text.replace(/'/g, \"''\") }}') RETURNING id",
         "options": {}
       },
       "id": "save-user-message",
       "name": "Save User Message",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [750, 400],
+      "position": [650, 400],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -168,14 +162,14 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT role, content FROM messages WHERE conversation_id = {{ $('Upsert Conversation').first().json.id }} ORDER BY created_at ASC LIMIT 20",
+        "query": "SELECT role, content FROM messages WHERE conversation_id = '{{ $('Upsert Conversation').first().json.id }}' ORDER BY created_at ASC LIMIT 20",
         "options": {}
       },
       "id": "load-memory",
       "name": "Load Conversation History",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [900, 400],
+      "position": [850, 400],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -195,39 +189,13 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://api.anthropic.com/v1/messages",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "anthropic-version",
-              "value": "2023-06-01"
-            },
-            {
-              "name": "content-type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, system: $json.system, messages: $json.messages }) }}",
-        "options": {}
+        "jsCode": "// =============================================================================\n// TELEGRAM TYPING ANIMATION + CLAUDE API CALL\n// =============================================================================\n// This node shows an animated typing indicator while waiting for Claude's response.\n// \n// WHY THIS EXISTS:\n// Telegram's sendChatAction 'typing' API returns success but NEVER displays for bots.\n// This is a known Telegram limitation - bots don't have 'Last Seen' status.\n// \n// HOW IT WORKS:\n// 1. Send a dots message: ●○○\n// 2. Start animation loop (non-blocking promise): ●○○ → ○●○ → ○○● \n// 3. Call Claude API (awaits while animation runs)\n// 4. Stop animation and delete dots message\n// 5. Return Claude's response\n//\n// The animation promise is invoked but NOT awaited, so it runs concurrently.\n// =============================================================================\n\n// IMPORTANT: Replace these with your actual values\nconst botToken = 'YOUR_BOT_TOKEN_HERE';  // Get from @BotFather\nconst anthropicKey = 'YOUR_ANTHROPIC_API_KEY_HERE';  // Get from console.anthropic.com\n\nconst chatId = $execution.customData.get('chat_id');\nconst inputData = $input.first().json;\n\n// 1. Send initial dots message\nconst sendResult = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `https://api.telegram.org/bot${botToken}/sendMessage`,\n  body: { chat_id: chatId, text: '●○○' },\n  json: true\n});\nconst dotsMessageId = sendResult.result.message_id;\n\n// 2. Animation control\nlet stopAnimation = false;\nconst dots = ['○●○', '○○●', '●○○'];\n\n// Start animation (non-blocking - do NOT await this promise)\nconst animatePromise = (async () => {\n  for (let i = 0; i < 240 && !stopAnimation; i++) {  // 60 seconds max\n    await new Promise(r => setTimeout(r, 250));  // 250ms between frames\n    if (stopAnimation) break;\n    try {\n      await this.helpers.httpRequest({\n        method: 'POST',\n        url: `https://api.telegram.org/bot${botToken}/editMessageText`,\n        body: { chat_id: chatId, message_id: dotsMessageId, text: dots[i % 3] },\n        json: true\n      });\n    } catch (e) { break; }  // Exit if message deleted\n  }\n})();\n\n// 3. Call Claude API (this awaits while animation runs concurrently)\nconst claudeResponse = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://api.anthropic.com/v1/messages',\n  headers: {\n    'x-api-key': anthropicKey,\n    'anthropic-version': '2023-06-01',\n    'content-type': 'application/json'\n  },\n  body: {\n    model: inputData.model,\n    max_tokens: inputData.max_tokens,\n    system: inputData.system,\n    messages: inputData.messages\n  },\n  json: true\n});\n\n// 4. Stop animation and delete dots message\nstopAnimation = true;\ntry {\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://api.telegram.org/bot${botToken}/deleteMessage`,\n    body: { chat_id: chatId, message_id: dotsMessageId },\n    json: true\n  });\n} catch (e) { /* ignore if already deleted */ }\n\n// 5. Return Claude response (same format as HTTP Request node)\nreturn [{ json: claudeResponse }];"
       },
-      "id": "claude-ai",
-      "name": "Claude AI (HTTP)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1200, 400],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
-          "name": "Anthropic API Key"
-        }
-      }
+      "id": "claude-ai-typing",
+      "name": "Claude AI (with Typing)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
     },
     {
       "parameters": {
@@ -239,7 +207,7 @@
       "name": "Save Assistant Message",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [1350, 400],
+      "position": [1450, 400],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -255,7 +223,7 @@
       "name": "Extract Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1500, 400]
+      "position": [1650, 400]
     },
     {
       "parameters": {
@@ -283,7 +251,7 @@
       "name": "Check for Email",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1650, 400]
+      "position": [1850, 400]
     },
     {
       "parameters": {
@@ -295,7 +263,7 @@
       "name": "Save Lead",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [1850, 200],
+      "position": [2050, 200],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -313,7 +281,7 @@
       "name": "Mark Completed",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [2000, 200],
+      "position": [2250, 200],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -349,7 +317,7 @@
       "name": "Summarize Chat",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2150, 200],
+      "position": [2450, 200],
       "credentials": {
         "httpHeaderAuth": {
           "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
@@ -370,17 +338,38 @@
       "name": "Notify Team (Slack)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2300, 200]
+      "position": [2650, 200]
     },
     {
       "parameters": {
-        "jsCode": "// Split Claude's response into paragraphs and send each as separate message\n// This avoids the n8n footer and creates a more natural chat experience\nconst chatId = $execution.customData.get('chat_id');\nconst fullText = $('Claude AI (HTTP)').first().json.content[0].text;\n\n// IMPORTANT: Replace with your bot token\nconst botToken = 'YOUR_BOT_TOKEN_HERE';\n\n// Split by double newline (paragraphs)\nconst paragraphs = fullText.split(/\\n\\n+/).filter(p => p.trim());\n\n// Send each paragraph as a separate message\nfor (let i = 0; i < paragraphs.length; i++) {\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://api.telegram.org/bot${botToken}/sendMessage`,\n    body: {\n      chat_id: chatId,\n      text: paragraphs[i].trim()\n    },\n    json: true\n  });\n  \n  // Small delay between messages for natural feel\n  if (i < paragraphs.length - 1) {\n    await new Promise(resolve => setTimeout(resolve, 500));\n  }\n}\n\nreturn [{ json: { sent: true, paragraphs: paragraphs.length } }];"
+        "jsCode": "// Send Claude's response as Telegram messages\nconst chatId = $execution.customData.get('chat_id');\nconst fullText = $('Claude AI (with Typing)').first().json.content[0].text;\n\n// IMPORTANT: Replace with your bot token\nconst botToken = 'YOUR_BOT_TOKEN_HERE';\n\n// Split by double newline (paragraphs)\nconst paragraphs = fullText.split(/\\n\\n+/).filter(p => p.trim());\n\n// Send each paragraph as a separate message\nfor (let i = 0; i < paragraphs.length; i++) {\n  if (i > 0) await new Promise(resolve => setTimeout(resolve, 500));\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://api.telegram.org/bot${botToken}/sendMessage`,\n    body: {\n      chat_id: chatId,\n      text: paragraphs[i].trim()\n    },\n    json: true\n  });\n}\n\nreturn [{ json: { sent: true, paragraphs: paragraphs.length } }];"
       },
       "id": "send-telegram-messages",
       "name": "Send Telegram Messages",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1850, 600]
+      "position": [2050, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.token }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Extract Email').first().json.chat_id, text: \"Got it! I've saved your email. The team will be in touch within 24 hours with a custom quote. Thanks for chatting!\" }) }}",
+        "options": {}
+      },
+      "id": "send-closing-message",
+      "name": "Send Closing Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2850, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
     }
   ],
   "connections": {
@@ -450,17 +439,6 @@
       "main": [
         [
           {
-            "node": "Show Typing",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Show Typing": {
-      "main": [
-        [
-          {
             "node": "Save User Message",
             "type": "main",
             "index": 0
@@ -494,14 +472,14 @@
       "main": [
         [
           {
-            "node": "Claude AI (HTTP)",
+            "node": "Claude AI (with Typing)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Claude AI (HTTP)": {
+    "Claude AI (with Typing)": {
       "main": [
         [
           {
@@ -589,7 +567,7 @@
       "main": [
         [
           {
-            "node": "Send Telegram Messages",
+            "node": "Send Closing Message",
             "type": "main",
             "index": 0
           }
@@ -604,5 +582,5 @@
   "tags": [],
   "triggerCount": 0,
   "updatedAt": "2025-12-11T00:00:00.000Z",
-  "versionId": "4"
+  "versionId": "5"
 }
