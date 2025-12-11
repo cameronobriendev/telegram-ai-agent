@@ -47,26 +47,74 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
-        "text": "Hey! I'm your AI assistant.\n\nI help people figure out what parts of their business can be automated. What's something you do manually that feels like it should just... happen?",
-        "additionalFields": {}
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.token }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Telegram Trigger').item.json.message.chat.id, text: \"Hey! I'm your AI assistant.\" }) }}",
+        "options": {}
       },
-      "id": "send-welcome",
-      "name": "Send Welcome",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [450, 100],
+      "id": "send-welcome-1",
+      "name": "Send Welcome 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.token }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Telegram Trigger').item.json.message.chat.id, text: \"I help people figure out what parts of their business can be automated. What's something you do manually that feels like it should just... happen?\" }) }}",
+        "options": {}
+      },
+      "id": "send-welcome-2",
+      "name": "Send Welcome 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversations (session_id) VALUES ('tg_{{ $('Telegram Trigger').item.json.message.chat.id }}') ON CONFLICT (session_id) DO UPDATE SET updated_at = NOW() RETURNING id",
+        "options": {}
+      },
+      "id": "init-conversation",
+      "name": "Init Conversation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [850, 100],
       "credentials": {
-        "telegramApi": {
-          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
-          "name": "Telegram Bot"
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "PostgreSQL"
         }
       }
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO conversations (session_id) VALUES ('{{ $('Telegram Trigger').item.json.message.chat.id }}') ON CONFLICT (session_id) DO UPDATE SET updated_at = NOW() RETURNING id",
+        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ((SELECT id FROM conversations WHERE session_id = 'tg_{{ $('Telegram Trigger').item.json.message.chat.id }}'), 'assistant', 'Hey! I''m your AI assistant. I help people figure out what parts of their business can be automated. What''s something you do manually that feels like it should just... happen?') RETURNING id",
+        "options": {}
+      },
+      "id": "save-welcome-message",
+      "name": "Save Welcome Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1050, 100],
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversations (session_id) VALUES ('tg_{{ $('Telegram Trigger').item.json.message.chat.id }}') ON CONFLICT (session_id) DO UPDATE SET updated_at = NOW() RETURNING id",
         "options": {}
       },
       "id": "upsert-conversation",
@@ -83,15 +131,33 @@
     },
     {
       "parameters": {
+        "operation": "sendChatAction",
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "action": "typing"
+      },
+      "id": "show-typing",
+      "name": "Show Typing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [600, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ((SELECT id FROM conversations WHERE session_id = '{{ $('Telegram Trigger').item.json.message.chat.id }}'), 'user', '{{ $('Telegram Trigger').item.json.message.text.replace(/'/g, \"''\") }}') RETURNING id",
+        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ((SELECT id FROM conversations WHERE session_id = 'tg_{{ $('Telegram Trigger').item.json.message.chat.id }}'), 'user', '{{ $('Telegram Trigger').item.json.message.text.replace(/'/g, \"''\") }}') RETURNING id",
         "options": {}
       },
       "id": "save-user-message",
       "name": "Save User Message",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [700, 400],
+      "position": [750, 400],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -102,14 +168,14 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT role, content FROM messages WHERE conversation_id = (SELECT id FROM conversations WHERE session_id = '{{ $('Telegram Trigger').item.json.message.chat.id }}') ORDER BY created_at ASC LIMIT 20",
+        "query": "SELECT role, content FROM messages WHERE conversation_id = (SELECT id FROM conversations WHERE session_id = 'tg_{{ $('Telegram Trigger').item.json.message.chat.id }}') ORDER BY created_at ASC LIMIT 20",
         "options": {}
       },
       "id": "load-memory",
       "name": "Load Conversation History",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [950, 400],
+      "position": [900, 400],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -119,13 +185,13 @@
     },
     {
       "parameters": {
-        "jsCode": "// Store data we'll need later in the workflow\n$execution.customData.set('chat_id', String($('Telegram Trigger').item.json.message.chat.id));\n$execution.customData.set('user_message', String($('Telegram Trigger').item.json.message.text));\n\n// Format conversation history for Claude API\nconst inputItems = $input.all();\nconst messages = inputItems.map(item => ({\n  role: item.json.role,\n  content: item.json.content\n}));\n\n// CUSTOMIZE THIS PROMPT FOR YOUR USE CASE\nconst systemPrompt = `You are a friendly AI assistant chatting on Telegram. Your job is to:\n\n1. QUALIFY LEADS by understanding their needs\n2. ASK ABOUT: What problems they're facing, what tools they use, their timeline\n3. BE CONVERSATIONAL - friendly, not salesy\n4. COLLECT EMAIL at the end to send them a quote\n\nConversation flow:\n- First: Acknowledge their pain point, ask what tools they currently use\n- Second: Ask how often this task happens (triggered vs scheduled)\n- Third: Ask about timeline (ASAP vs exploring)\n- Fourth: Say you have a good picture, ask for email to send quote\n- Fifth: Confirm email saved, team will be in touch within 24 hours\n\nKeep responses SHORT (2-3 sentences max). Be warm but professional.\n\nIf they provide an email address, respond with confirmation and end the conversation.\n\nDO NOT make up pricing. Say the team will provide a custom quote.`;\n\nreturn [{\n  json: {\n    model: 'claude-sonnet-4-20250514',\n    max_tokens: 300,\n    system: systemPrompt,\n    messages: messages\n  }\n}];"
+        "jsCode": "// Store data we'll need later in the workflow\n$execution.customData.set('chat_id', String($('Telegram Trigger').item.json.message.chat.id));\n$execution.customData.set('session_id', 'tg_' + String($('Telegram Trigger').item.json.message.chat.id));\n$execution.customData.set('user_message', String($('Telegram Trigger').item.json.message.text));\n\n// Format conversation history for Claude API\nconst inputItems = $input.all();\nconst messages = inputItems.map(item => ({\n  role: item.json.role,\n  content: item.json.content\n}));\n\n// CUSTOMIZE THIS PROMPT FOR YOUR USE CASE\nconst systemPrompt = `You are a friendly AI assistant chatting on Telegram. You've already introduced yourself, so DO NOT re-introduce or say \"Hey\" again.\n\nYour job is to:\n1. QUALIFY LEADS by understanding their needs\n2. ASK ABOUT: What problems they're facing, what tools they use, their timeline\n3. BE CONVERSATIONAL - friendly, not salesy\n4. COLLECT EMAIL at the end to send them a quote\n\nConversation flow:\n- First: Acknowledge their pain point, ask what tools they currently use\n- Second: Ask how often this task happens (triggered vs scheduled)\n- Third: Ask about timeline (ASAP vs exploring)\n- Fourth: Say you have a good picture, ask for email to send quote\n- Fifth: Confirm email saved, team will be in touch within 24 hours\n\nKeep responses SHORT (2-3 sentences max). Be warm but professional.\n\nIf they provide an email address, respond with confirmation and end the conversation.\n\nDO NOT make up pricing. Say the team will provide a custom quote.`;\n\nreturn [{\n  json: {\n    model: 'claude-sonnet-4-20250514',\n    max_tokens: 300,\n    system: systemPrompt,\n    messages: messages\n  }\n}];"
       },
       "id": "format-messages",
       "name": "Format Messages",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1200, 400]
+      "position": [1050, 400]
     },
     {
       "parameters": {
@@ -155,7 +221,7 @@
       "name": "Claude AI (HTTP)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1450, 400],
+      "position": [1200, 400],
       "credentials": {
         "httpHeaderAuth": {
           "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
@@ -166,14 +232,14 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ((SELECT id FROM conversations WHERE session_id = '{{ $execution.customData.get(\"chat_id\") }}'), 'assistant', '{{ $json.content[0].text.replace(/'/g, \"''\") }}') RETURNING id",
+        "query": "INSERT INTO messages (conversation_id, role, content) VALUES ((SELECT id FROM conversations WHERE session_id = '{{ $execution.customData.get(\"session_id\") }}'), 'assistant', '{{ $json.content[0].text.replace(/'/g, \"''\") }}') RETURNING id",
         "options": {}
       },
       "id": "save-assistant-message",
       "name": "Save Assistant Message",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [1700, 400],
+      "position": [1350, 400],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -183,13 +249,13 @@
     },
     {
       "parameters": {
-        "jsCode": "// Check for and extract email from message\nconst message = $execution.customData.get('user_message');\nconst emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst email = emailMatch ? emailMatch[0] : null;\nconst hasEmail = email !== null;\n\nreturn [{\n  json: {\n    email: email,\n    hasEmail: hasEmail,\n    chat_id: $execution.customData.get('chat_id')\n  }\n}];"
+        "jsCode": "// Check for and extract email from message\nconst message = $execution.customData.get('user_message');\nconst emailMatch = message.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);\nconst email = emailMatch ? emailMatch[0] : null;\nconst hasEmail = email !== null;\n\nreturn [{\n  json: {\n    email: email,\n    hasEmail: hasEmail,\n    session_id: $execution.customData.get('session_id'),\n    chat_id: $execution.customData.get('chat_id')\n  }\n}];"
       },
       "id": "extract-email",
       "name": "Extract Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1950, 400]
+      "position": [1500, 400]
     },
     {
       "parameters": {
@@ -217,19 +283,19 @@
       "name": "Check for Email",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [2200, 400]
+      "position": [1650, 400]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH conv AS (SELECT id FROM conversations WHERE session_id = '{{ $json.chat_id }}'), summary AS (SELECT string_agg(role || ': ' || content, E'\\n' ORDER BY created_at) as chat FROM messages WHERE conversation_id = (SELECT id FROM conv)) INSERT INTO leads (conversation_id, email, chat_summary) VALUES ((SELECT id FROM conv), '{{ $json.email }}', (SELECT chat FROM summary)) RETURNING id, email, chat_summary",
+        "query": "WITH conv AS (SELECT id FROM conversations WHERE session_id = '{{ $json.session_id }}'), summary AS (SELECT string_agg(role || ': ' || content, E'\\n' ORDER BY created_at) as chat FROM messages WHERE conversation_id = (SELECT id FROM conv)) INSERT INTO leads (conversation_id, email, chat_summary) VALUES ((SELECT id FROM conv), '{{ $json.email }}', (SELECT chat FROM summary)) RETURNING id, email, chat_summary",
         "options": {}
       },
       "id": "save-lead",
       "name": "Save Lead",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [2450, 200],
+      "position": [1850, 200],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -240,14 +306,14 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE conversations SET status = 'completed' WHERE session_id = '{{ $('Extract Email').first().json.chat_id }}'",
+        "query": "UPDATE conversations SET status = 'completed' WHERE session_id = '{{ $('Extract Email').first().json.session_id }}'",
         "options": {}
       },
       "id": "mark-completed",
       "name": "Mark Completed",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [2700, 200],
+      "position": [2000, 200],
       "credentials": {
         "postgres": {
           "id": "YOUR_POSTGRES_CREDENTIAL_ID",
@@ -283,7 +349,7 @@
       "name": "Summarize Chat",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2950, 200],
+      "position": [2150, 200],
       "credentials": {
         "httpHeaderAuth": {
           "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
@@ -304,25 +370,17 @@
       "name": "Notify Team (Slack)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3200, 200]
+      "position": [2300, 200]
     },
     {
       "parameters": {
-        "chatId": "={{ $execution.customData.get('chat_id') }}",
-        "text": "={{ $('Claude AI (HTTP)').first().json.content[0].text }}",
-        "additionalFields": {}
+        "jsCode": "// Split Claude's response into paragraphs and send each as separate message\n// This avoids the n8n footer and creates a more natural chat experience\nconst chatId = $execution.customData.get('chat_id');\nconst fullText = $('Claude AI (HTTP)').first().json.content[0].text;\n\n// IMPORTANT: Replace with your bot token\nconst botToken = 'YOUR_BOT_TOKEN_HERE';\n\n// Split by double newline (paragraphs)\nconst paragraphs = fullText.split(/\\n\\n+/).filter(p => p.trim());\n\n// Send each paragraph as a separate message\nfor (let i = 0; i < paragraphs.length; i++) {\n  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      chat_id: chatId,\n      text: paragraphs[i].trim()\n    })\n  });\n  \n  // Small delay between messages for natural feel\n  if (i < paragraphs.length - 1) {\n    await new Promise(resolve => setTimeout(resolve, 500));\n  }\n}\n\nreturn [{ json: { sent: true, paragraphs: paragraphs.length } }];"
       },
-      "id": "send-telegram-message",
-      "name": "Send Telegram Message",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [2450, 600],
-      "credentials": {
-        "telegramApi": {
-          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
-          "name": "Telegram Bot"
-        }
-      }
+      "id": "send-telegram-messages",
+      "name": "Send Telegram Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 600]
     }
   ],
   "connections": {
@@ -341,7 +399,7 @@
       "main": [
         [
           {
-            "node": "Send Welcome",
+            "node": "Send Welcome 1",
             "type": "main",
             "index": 0
           }
@@ -355,7 +413,51 @@
         ]
       ]
     },
+    "Send Welcome 1": {
+      "main": [
+        [
+          {
+            "node": "Send Welcome 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Welcome 2": {
+      "main": [
+        [
+          {
+            "node": "Init Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Conversation": {
+      "main": [
+        [
+          {
+            "node": "Save Welcome Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Upsert Conversation": {
+      "main": [
+        [
+          {
+            "node": "Show Typing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Show Typing": {
       "main": [
         [
           {
@@ -443,7 +545,7 @@
         ],
         [
           {
-            "node": "Send Telegram Message",
+            "node": "Send Telegram Messages",
             "type": "main",
             "index": 0
           }
@@ -487,7 +589,7 @@
       "main": [
         [
           {
-            "node": "Send Telegram Message",
+            "node": "Send Telegram Messages",
             "type": "main",
             "index": 0
           }
@@ -502,5 +604,5 @@
   "tags": [],
   "triggerCount": 0,
   "updatedAt": "2025-12-11T00:00:00.000Z",
-  "versionId": "2"
+  "versionId": "4"
 }
